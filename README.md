@@ -136,9 +136,9 @@ We provide task templates to facilitate tasks beyond detection (e.g., counting, 
 
 ## Evaluation
 **Model performance when integrated with UPN is as follows:**
-| Model                          | COCO mAP | CountBench Accuracy | Pixmo-Count Accuracy |
-|---------------------------------|----------|---------------------|----------------------|
-| VLM-FO1_Qwen2.5-VL-3B-v01 (FO1 + UPN) |   44.6   |       89.94%        |       84.88%         |
+| Model                          | COCO mAP | CountBench Accuracy | Pixmo-Count Accuracy |  HumanRef DF1/P/R |   LVIS SS/S-IoU | PACO SS/S-IoU | COCOText |
+|---------------------------------|----------|----------|----------|----------|------|------|------|       
+| VLM-FO1_Qwen2.5-VL-3B-v01 (FO1 + UPN) |   44.4   |       89.73%        |       85.07%         |    82.6/86.8/83.5|   92.5/87   |  88.1/77.9 |  57.1 |
 
 For benchmarking FO1 with UPN on your datasets, you can adapt the inference pipeline to export predictions and compare against ground-truth. We also include evaluation utilities under `evaluation/` for specific tasks.
 
