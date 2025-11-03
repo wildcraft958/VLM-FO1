@@ -11,7 +11,7 @@ VLM-FO1 endows pre-trained VLMs with superior fine-grained perception without co
 VLM-FO1 excels at a wide range of fine-grained perception tasks, including Object Grounding, Region Generative
 Understanding, Visual Region Reasoning, and more.
 
-For more details, check out our **[paper](https://arxiv.org/abs/2403.06892)**
+For more details, check out our **[paper](https://arxiv.org/abs/2509.25916)**
 
 <p align="center">
   <img src="assets/overall_results.png" alt="VLM-FO1 Overall Results" style="max-width:100%;">
