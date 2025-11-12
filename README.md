@@ -49,6 +49,7 @@ If you are interested in our research, we welcome you to explore our other wonde
 - Quick Start
   - Inference with Provided Bounding Boxes
   - Inference with Object Detector
+  - Inference with Gradio Demo
 - Task Templates
 - Evaluation
 - Citation
@@ -132,6 +133,14 @@ The script will:
 - Filter proposals by score
 - Pass top proposals to FO1 for reasoning
 - Save the visualization to `demo/vlm_fo1_result.jpg`
+
+### 4) Inference with Gradio Demo
+Run:
+
+```bash
+python demo/gradio_demo.py
+```
+
 
 ## 📝 Task Templates
 
