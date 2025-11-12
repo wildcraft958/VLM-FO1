@@ -1,5 +1,5 @@
 from PIL import Image
-from PIL import ImageDraw
+from PIL import ImageDraw, ImageOps
 from io import BytesIO
 import base64
 import re 
@@ -193,19 +193,21 @@ def load_image(image_file):
         PIL.Image.Image: Loaded image in RGB mode, at least 28x28 in size.
     """
     if isinstance(image_file, Image.Image):
-        image = image_file
+        image = image_file.convert("RGB")
     # Case: load from URL
-    if image_file.startswith("http") or image_file.startswith("https"):
+    elif image_file.startswith("http") or image_file.startswith("https"):
         response = requests.get(image_file)
-        image = Image.open(BytesIO(response.content))
+        image = Image.open(BytesIO(response.content)).convert("RGB")
     # Case: load from base64-encoded string
     elif image_file.startswith("data:image/"):
         image = image_file.replace("data:image/jpeg;base64,", "")
         image_data = base64.b64decode(image)
-        image = Image.open(BytesIO(image_data))
-    else:
+        image = Image.open(BytesIO(image_data)).convert("RGB")
+    elif isinstance(image_file, str):
         # Case: load from local file path
         image = Image.open(image_file).convert("RGB")
+    else:
+        raise ValueError(f"Unsupported image type: {type(image_file)}")
     
     # Ensure minimum size 28x28
     if image.width < 28 or image.height < 28:
@@ -256,7 +258,7 @@ def draw_bboxes_and_save(
     # Draw detection boxes with `total_color`
     for bbox in detection_bboxes:
         if len(bbox) != 4:
-            print(f"警告: 跳过格式不正确的边界框 {bbox}")
+            print(f"Warning: skip the invalid bbox {bbox}")
             continue
         shape = [(bbox[0], bbox[1]), (bbox[2], bbox[3])]
         draw.rectangle(shape, outline=total_color, width=width)
@@ -265,7 +267,7 @@ def draw_bboxes_and_save(
     for bbox_label, bbox_list in fo1_bboxes.items():
         for bbox in bbox_list:
             if len(bbox) != 4:
-                print(f"警告: 跳过格式不正确的边界框 {bbox}")
+                print(f"Warning: skip the invalid bbox {bbox}")
                 continue
             shape = [(bbox[0], bbox[1]), (bbox[2], bbox[3])]
             draw.rectangle(shape, outline=color, width=width)
@@ -274,9 +276,9 @@ def draw_bboxes_and_save(
     # Save output image (catching common IO exceptions).
     try:
         image.save(output_path)
-        print(f"图像已成功保存在: {output_path}")
+        print(f"The image has been successfully saved to: {output_path}")
     except IOError as e:
-        print(f"错误: 无法保存图像到 {output_path}。原因: {e}")
+        print(f"Error: failed to save the image to {output_path}. Reason: {e}")
 
 def adjust_bbox(bbox_list, original_h, original_w, resize_h, resize_w):
     """

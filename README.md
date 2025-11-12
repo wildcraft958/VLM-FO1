@@ -32,7 +32,7 @@ For more details, check out our **[paper](https://arxiv.org/abs/2509.25916)**
 </p>
 
 ## 📝 ToDo
-- [ ] Release Gradio demo
+- [X] Release Gradio demo
 
 ## 🔗 Related works
 If you are interested in our research, we welcome you to explore our other wonderful projects.
