@@ -1,7 +1,16 @@
 # VLM-FO1: Bridging the Gap Between High-Level Reasoning and Fine-Grained Perception
 
 <p align="center">
- <a href="https://arxiv.org/pdf/2509.25916"><strong> [Paper 📄] </strong></a> <a href="https://huggingface.co/omlab/VLM-FO1_Qwen2.5-VL-3B-v01"><strong> [Model 🗂️] </strong></a>
+ <a href="https://arxiv.org/pdf/2509.25916">
+    <img 
+        src="https://img.shields.io/badge/VLM_FO1-Paper-blue?logo=arxiv" 
+    />
+  </a> 
+ <a href="https://huggingface.co/omlab/VLM-FO1_Qwen2.5-VL-3B-v01">
+    <img 
+        src="https://img.shields.io/badge/VLM_FO1-Model-orange?logo=huggingface" 
+    />
+  </a>
  <a href="https://huggingface.co/spaces/P3ngLiu/VLM-FO1-3B-Demo">
     <img 
         src="https://img.shields.io/badge/VLM_FO1-Demo-orange?logo=huggingface" 
