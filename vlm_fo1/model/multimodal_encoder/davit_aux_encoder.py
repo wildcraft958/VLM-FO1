@@ -24,14 +24,15 @@ class DavitVisionTower(AbsVisionTower):
 
         # In this implementation, training flag is ignored (always uses pretrained weights).
         is_train = False
-        if not delay_load:
-            self.load_model(is_train, self.image_size, self.aspect_ratio)
-        else:
-            # Only load/prepare configuration (not model weights or modules)
-            cfg_dict = model_configs[self.vision_tower_name.split('/')[-1].replace('.pth', '')]
-            vision_cfg = DavitConfig.from_dict(cfg_dict)
-            vision_cfg.image_size = image_size
-            self.cfg_only = vision_cfg
+        # if not delay_load:
+        #     self.load_model(is_train, self.image_size, self.aspect_ratio)
+        # else:
+        #     # Only load/prepare configuration (not model weights or modules)
+        #     cfg_dict = model_configs[self.vision_tower_name.split('/')[-1].replace('.pth', '')]
+        #     vision_cfg = DavitConfig.from_dict(cfg_dict)
+        #     vision_cfg.image_size = image_size
+        #     self.cfg_only = vision_cfg
+        self.load_model(is_train, self.image_size, self.aspect_ratio)
         
     def load_model(self, is_train=False, image_size=768, aspect_ratio='squash'):
         """

@@ -192,11 +192,13 @@ class Qwen2_5_VlVisionTower(nn.Module):
         self.delay_load = delay_load
         print (f"Qwen2_5_VlVisionTower loading_info: delay_load: {delay_load} min_pixels: {min_pixels} max_pixels: {max_pixels}")
 
-        if not delay_load:
-            self.load_model()
-        else:
-            # Defer actual model loading to support (e.g.) model parallel or delayed download scenarios
-            self.cfg_only = args.vision_config
+        # if not delay_load:
+        #     self.load_model()
+        # else:
+        #     # Defer actual model loading to support (e.g.) model parallel or delayed download scenarios
+        #     self.cfg_only = args.vision_config
+        self.cfg_only = args.vision_config
+        self.load_model(model_path=args.name_or_path)
 
     def load_model(self, model_path=None, image_size=336, is_train=True):
         """

@@ -12,7 +12,8 @@ from vlm_fo1.task_templates import OD_template
 # Paths to required files
 upn_ckpt_path = "./resources/upn_large.pth"  # UPN model checkpoint
 img_path = "demo/demo_image.jpg"             # Path to input image
-model_path = './resources/VLM-FO1_Qwen2.5-VL-3B-v01'  # VLM FO1 model path
+model_path = 'omlab/VLM-FO1_Qwen2.5-VL-3B-v01'
+# model_path = './resources/VLM-FO1_Qwen2.5-VL-3B-v01'  # VLM FO1 model path
 
 
 # Initialize UPN object detector
