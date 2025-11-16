@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vlm-fo1"
+version = "0.1.0"
+description = "VLM-FO1: Bridging the Gap Between High-Level Reasoning and Fine-Grained Perception"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "Om AI Lab" }
+]
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
+]
+
+[project.urls]
+Homepage = "https://github.com/om-ai-lab/VLM-FO1"
+
+[project.optional-dependencies]
+# Keep base requirements in requirements.txt and expose grouped extras for tooling.
+base = [
+    "torch>=2.1",
+    "torchvision>=0.16",
+]
+upn = [
+    "mmcv>=2.0",
+    "mmengine>=0.10",
+]
+all = [
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "mmcv>=2.0",
+    "mmengine>=0.10",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "vlm_fo1*",
+    "detect_tools*",
+]
+exclude = [
+    "assets*",
+    "demo*",
+    "evaluation*",
+    "scripts*",
+]

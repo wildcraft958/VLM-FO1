@@ -93,6 +93,24 @@ conda activate vlm-fo1
 pip install -r requirements.txt
 ```
 
+### PyProject-based installs
+
+`pyproject.toml` metadata now lives both at the repo root and inside `detect_tools/upn/ops`, so modern pip/PEP 517 tooling can install the codebase without falling back to legacy behaviors. Typical combos:
+
+```bash
+# Install core VLM-FO1 dependencies without detector extras
+pip install -e .[base]
+
+# Install everything, including the UPN detector stack
+pip install -e .[base,upn]
+
+# Rebuild the native ops module in isolation (requires CUDA headers for the CUDA path)
+cd detect_tools/upn/ops
+pip install -e . --no-build-isolation
+```
+
+The extras mirror the content of `requirements.txt`, so you can keep using the raw requirements files if you prefer.
+
 ### Building the MultiScaleDeformableAttention native ops
 
 The UPN detector relies on the `detect_tools/upn/ops` extension for peak performance. The build is optional—if it cannot run, the Python package now falls back to a CPU-only stub so the rest of the repo still installs.

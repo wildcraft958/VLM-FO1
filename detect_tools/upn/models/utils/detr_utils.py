@@ -354,7 +354,7 @@ def gen_encoder_output_proposals(
     spatial_shapes: torch.Tensor,
     learnedwh=None,
 ):
-    """
+    r"""
     Input:
         - memory: bs, \sum{hw}, d_model
         - memory_padding_mask: bs, \sum{hw}
