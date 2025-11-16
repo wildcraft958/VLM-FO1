@@ -93,6 +93,32 @@ conda activate vlm-fo1
 pip install -r requirements.txt
 ```
 
+### Building the MultiScaleDeformableAttention native ops
+
+The UPN detector relies on the `detect_tools/upn/ops` extension for peak performance. The build is optional—if it cannot run, the Python package now falls back to a CPU-only stub so the rest of the repo still installs.
+
+**Prerequisites**
+
+- A pre-installed PyTorch wheel that matches your CUDA runtime (or CPU-only if you only need the fallback).
+- A compiler toolchain (g++/clang) plus CUDA toolkit *headers* (specifically `cusparse.h`) when building the CUDA path.
+- `pip install -e detect_tools/upn/ops --no-build-isolation` (or `-v` for verbose logs) so pip reuses the already-installed PyTorch wheel instead of trying to build it from source.
+
+**Typical GPU dev machine**
+
+```bash
+cd detect_tools/upn/ops
+pip install -v -e . --no-build-isolation
+```
+
+If the script does not find CUDA headers, it automatically falls back to compiling the CPU-only variant so editable installs continue to work.
+
+**Colab / ephemeral environments**
+
+1. `pip install --upgrade torch torchvision` (choose the CUDA wheel available on Colab).
+2. `cd detect_tools/upn/ops && pip install -e . --no-build-isolation`.
+
+If CUDA headers such as `cusparse.h` are missing (the default on Colab), the install succeeds and the runtime loader prints a warning before using the safe CPU fallback. When you later develop on a machine with a CUDA toolkit, simply reinstall the ops package to pick up the optimized kernels.
+
 ## 🚀 Quick Start
 
 ### 1) Download Model Checkpoints
@@ -118,14 +144,16 @@ The visualization with predicted boxes will be saved to `demo/vlm_fo1_result.jpg
 
 **Note:** Due to company policy, we are unable to release the object detector OPN referenced in our paper. Instead, we provide integration with UPN (from [ChatRex](https://github.com/IDEA-Research/ChatRex)), which offers similar functionality. You are also free to use any object detector of your choice by preparing bounding box proposals compatible with our pipeline.
 
-Before running, you need to install UPN's requirements and build the ops extension:
+Before running, you need to install UPN's requirements and (optionally) build the ops extension:
 
 ```bash
 cd detect_tools/upn
 pip install -r requirements.txt
 cd ops
-pip install -v -e .
+pip install -v -e . --no-build-isolation
 ```
+
+> 💡 If the command above warns that the CUDA extension was skipped, the CPU fallback will be used automatically. Re-run the install on a CUDA-enabled machine to enable the optimized kernels.
 
 Then, download the UPN checkpoint from [this link](https://github.com/IDEA-Research/ChatRex/releases/download/upn-large/upn_large.pth) and place it in your `resources/` folder:
 
