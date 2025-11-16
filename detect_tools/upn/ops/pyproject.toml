@@ -10,7 +10,7 @@ name = "multiscale-deformable-attention"
 version = "1.0.0"
 description = "PyTorch bindings for Multi-Scale Deformable Attention"
 requires-python = ">=3.8"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
 authors = [
     { name = "VLM-FO1 Maintainers" }
 ]
@@ -19,7 +19,6 @@ keywords = ["upn", "deformable", "attention", "cuda"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
 ]
 

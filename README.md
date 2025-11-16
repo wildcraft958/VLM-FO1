@@ -128,14 +128,14 @@ cd detect_tools/upn/ops
 pip install -v -e . --no-build-isolation
 ```
 
-If the script does not find CUDA headers, it automatically falls back to compiling the CPU-only variant so editable installs continue to work.
+If the script does not find CUDA headers, it skips the build entirely and the runtime loader falls back to the pure Python stub so editable installs continue to work.
 
 **Colab / ephemeral environments**
 
 1. `pip install --upgrade torch torchvision` (choose the CUDA wheel available on Colab).
 2. `cd detect_tools/upn/ops && pip install -e . --no-build-isolation`.
 
-If CUDA headers such as `cusparse.h` are missing (the default on Colab), the install succeeds and the runtime loader prints a warning before using the safe CPU fallback. When you later develop on a machine with a CUDA toolkit, simply reinstall the ops package to pick up the optimized kernels.
+If CUDA headers such as `cusparse.h` are missing (the default on Colab), the installer now skips building the native extension and the runtime loader prints a warning before using the safe CPU fallback. When you later develop on a machine with a CUDA toolkit, reinstall the ops package to pick up the optimized kernels.
 
 ## 🚀 Quick Start
 

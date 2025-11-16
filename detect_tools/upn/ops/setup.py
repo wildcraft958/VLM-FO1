@@ -76,29 +76,34 @@ def _build_extensions():
     source_cpu = glob.glob(os.path.join(extensions_dir, "cpu", "*.cpp"))
     source_cuda = glob.glob(os.path.join(extensions_dir, "cuda", "*.cu"))
 
-    sources = main_file + source_cpu
-    define_macros = []
-    extra_compile_args = {"cxx": []}
-    extension_cls = CppExtension
+    if not (
+        CUDAExtension
+        and source_cuda
+        and _should_build_cuda(torch_module, CUDA_HOME)
+    ):
+        warnings.warn(
+            "CUDA toolkit headers missing. Skipping native build; the CPU fallback will be used instead.",
+            stacklevel=2,
+        )
+        return [], {}
 
-    if CUDAExtension and source_cuda and _should_build_cuda(torch_module, CUDA_HOME):
-        extension_cls = CUDAExtension
-        sources += source_cuda
-        define_macros.append(("WITH_CUDA", None))
-        extra_compile_args["nvcc"] = [
+    sources = [os.path.join(extensions_dir, s) for s in (main_file + source_cpu + source_cuda)]
+    define_macros = [("WITH_CUDA", None)]
+    extra_compile_args = {
+        "cxx": [],
+        "nvcc": [
             "-DCUDA_HAS_FP16=1",
             "-D__CUDA_NO_HALF_OPERATORS__",
             "-D__CUDA_NO_HALF_CONVERSIONS__",
             "-D__CUDA_NO_HALF2_OPERATORS__",
-        ]
+        ],
+    }
 
-    sources = [os.path.join(extensions_dir, s) for s in sources]
-    include_dirs = [extensions_dir]
     ext_modules = [
-        extension_cls(
+        CUDAExtension(
             _EXTENSION_NAME,
             sources,
-            include_dirs=include_dirs,
+            include_dirs=[extensions_dir],
             define_macros=define_macros,
             extra_compile_args=extra_compile_args,
         )
