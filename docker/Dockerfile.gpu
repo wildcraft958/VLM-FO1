@@ -1,0 +1,107 @@
+# Dockerfile for building VLM-FO1 wheels with CUDA 11.8 support
+#
+# This multi-stage Dockerfile builds manylinux-compatible wheels
+# with CUDA 11.8 support for the VLM-FO1 package.
+#
+# Build with:
+#   docker build -f docker/Dockerfile.gpu -t vlm-fo1-builder:cu118 .
+#   docker run --rm -v $(pwd)/dist:/dist vlm-fo1-builder:cu118
+#
+
+# Stage 1: Builder with CUDA toolkit
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    BUILD_CUDA=cu118 \
+    CUDA_HOME=/usr/local/cuda-11.8 \
+    PATH=/usr/local/cuda-11.8/bin:$PATH \
+    LD_LIBRARY_PATH=/usr/local/cuda-11.8/lib64:$LD_LIBRARY_PATH
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    wget \
+    curl \
+    ca-certificates \
+    software-properties-common \
+    patchelf \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python versions (3.9, 3.10, 3.11)
+RUN add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3.9 python3.9-dev python3.9-venv \
+        python3.10 python3.10-dev python3.10-venv \
+        python3.11 python3.11-dev python3.11-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pip for each Python version
+RUN for PY in python3.9 python3.10 python3.11; do \
+        curl -sS https://bootstrap.pypa.io/get-pip.py | $PY; \
+    done
+
+# Install build tools
+RUN python3.10 -m pip install --no-cache-dir \
+    build \
+    wheel \
+    setuptools>=68 \
+    setuptools-scm>=8 \
+    auditwheel \
+    cibuildwheel
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy source code
+COPY . /workspace/
+
+# Build wheels for all Python versions
+RUN for PY_VER in cp39-cp39 cp310-cp310 cp311-cp311; do \
+        echo "Building wheel for ${PY_VER} with CUDA 11.8..."; \
+        case $PY_VER in \
+            cp39*) PYTHON=python3.9 ;; \
+            cp310*) PYTHON=python3.10 ;; \
+            cp311*) PYTHON=python3.11 ;; \
+        esac; \
+        \
+        # Install build dependencies
+        $PYTHON -m pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cu118; \
+        $PYTHON -m pip install --no-cache-dir build wheel setuptools>=68 setuptools-scm>=8; \
+        \
+        # Build wheel
+        BUILD_CUDA=cu118 $PYTHON -m build --wheel --outdir /tmp/wheels; \
+    done
+
+# Repair wheels for manylinux compatibility
+RUN mkdir -p /dist && \
+    for wheel in /tmp/wheels/*.whl; do \
+        echo "Repairing wheel: $(basename $wheel)"; \
+        auditwheel repair "$wheel" --plat manylinux_2_28_x86_64 -w /dist || \
+        cp "$wheel" /dist/; \
+    done
+
+# List built wheels
+RUN echo "Built wheels:" && ls -lh /dist/
+
+# Stage 2: Minimal runtime image (optional, for testing)
+FROM nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy wheels from builder
+COPY --from=builder /dist /wheels
+
+RUN echo "Available wheels:" && ls -lh /wheels/
+
+# Default command: copy wheels to mounted /dist volume
+CMD ["sh", "-c", "cp /wheels/*.whl /dist/ && echo 'Wheels copied to /dist'"]

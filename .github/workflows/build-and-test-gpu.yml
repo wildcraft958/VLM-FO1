@@ -1,0 +1,227 @@
+name: Build and Test GPU Wheels
+
+on:
+  push:
+    branches: [main, dev]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      upload_artifacts:
+        description: 'Upload artifacts to release'
+        required: false
+        default: 'false'
+
+env:
+  PYTHON_VERSION_DEFAULT: '3.10'
+
+jobs:
+  # Build wheels for different Python versions and CUDA variants
+  build-wheels:
+    name: Build ${{ matrix.build_cuda }} wheel (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+        build_cuda: ['cpu', 'cu118']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for setuptools-scm versioning
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build wheel setuptools>=68 setuptools-scm>=8 cibuildwheel auditwheel
+
+      - name: Set up CUDA toolkit (for CUDA builds)
+        if: matrix.build_cuda != 'cpu'
+        uses: Jimver/cuda-toolkit@v0.2.14
+        with:
+          cuda: '11.8.0'
+          method: 'network'
+          sub-packages: '["nvcc", "cudart", "cudart-dev"]'
+
+      - name: Install PyTorch (CPU)
+        if: matrix.build_cuda == 'cpu'
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install PyTorch (CUDA 11.8)
+        if: matrix.build_cuda == 'cu118'
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+      - name: Build wheel
+        env:
+          BUILD_CUDA: ${{ matrix.build_cuda }}
+          CUDA_HOME: ${{ matrix.build_cuda != 'cpu' && '/usr/local/cuda-11.8' || '' }}
+        run: |
+          echo "Building wheel with BUILD_CUDA=$BUILD_CUDA"
+          python -m build --wheel --outdir dist/
+
+      - name: List built wheels
+        run: |
+          echo "Built wheels:"
+          ls -lh dist/
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.build_cuda }}-py${{ matrix.python-version }}
+          path: dist/*.whl
+          retention-days: 30
+
+  # Test wheels on CPU
+  test-cpu:
+    name: Test CPU wheel (Python ${{ matrix.python-version }})
+    needs: build-wheels
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Download CPU wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: wheel-cpu-py${{ matrix.python-version }}
+          path: dist/
+
+      - name: Install wheel
+        run: |
+          pip install --upgrade pip
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install dist/*.whl
+
+      - name: Run selfcheck
+        run: |
+          python -m vlm_fo1
+        continue-on-error: true
+
+      - name: Import test
+        run: |
+          python -c "import vlm_fo1; print(f'VLM-FO1 version: {vlm_fo1.__version__}')"
+          python -c "from vlm_fo1._backend import info; import json; print(json.dumps(info(), indent=2))"
+
+  # Smoke test documentation (no actual GPU required)
+  smoke-test-docs:
+    name: Validate GPU smoke test syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pytest numpy pillow
+
+      - name: Validate test syntax
+        run: |
+          python -m py_compile tests/e2e_gpu_smoke.py
+          echo "GPU smoke test syntax is valid"
+
+  # Publish wheels to GitHub Releases (on tags)
+  publish-release:
+    name: Publish to GitHub Releases
+    needs: [build-wheels, test-cpu]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-all/
+
+      - name: Organize wheels
+        run: |
+          mkdir -p dist/
+          find dist-all/ -name "*.whl" -exec cp {} dist/ \;
+          ls -lh dist/
+
+      - name: Create release notes
+        id: release_notes
+        run: |
+          cat << 'EOF' > RELEASE_NOTES.md
+          ## VLM-FO1 Release ${{ github.ref_name }}
+
+          ### Wheel Installation
+
+          **CPU-only:**
+          ```bash
+          pip install vlm-fo1-*+cpu-*.whl
+          ```
+
+          **CUDA 11.8:**
+          ```bash
+          # Install PyTorch with CUDA 11.8 first
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+
+          # Then install VLM-FO1
+          pip install vlm-fo1-*+cu118-*.whl
+          ```
+
+          ### Python Version Compatibility
+          - Python 3.9, 3.10, 3.11
+
+          ### Verification
+          After installation, verify with:
+          ```bash
+          python -m vlm_fo1
+          ```
+
+          ### Documentation
+          - See [CONTRIBUTING_GPU.md](https://github.com/om-ai-lab/VLM-FO1/blob/main/CONTRIBUTING_GPU.md) for building from source
+          - See [CLAUDE.md](https://github.com/om-ai-lab/VLM-FO1/blob/main/CLAUDE.md) for usage guide
+
+          ---
+          *Generated wheels: $(ls dist/ | wc -l) variants*
+          EOF
+
+          cat RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*.whl
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload to PyPI (if token available)
+        if: env.PYPI_TOKEN != ''
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          pip install twine
+          twine upload dist/*.whl --skip-existing
+        continue-on-error: true

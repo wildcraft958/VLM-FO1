@@ -1,0 +1,86 @@
+# Dockerfile for building VLM-FO1 CPU-only wheels
+#
+# This Dockerfile builds manylinux-compatible CPU-only wheels
+# for the VLM-FO1 package.
+#
+# Build with:
+#   docker build -f docker/Dockerfile.cpu -t vlm-fo1-builder:cpu .
+#   docker run --rm -v $(pwd)/dist:/dist vlm-fo1-builder:cpu
+#
+
+FROM ubuntu:22.04 AS builder
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    BUILD_CUDA=cpu
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    git \
+    wget \
+    curl \
+    ca-certificates \
+    software-properties-common \
+    patchelf \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python versions (3.9, 3.10, 3.11)
+RUN add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+        python3.9 python3.9-dev python3.9-venv \
+        python3.10 python3.10-dev python3.10-venv \
+        python3.11 python3.11-dev python3.11-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pip for each Python version
+RUN for PY in python3.9 python3.10 python3.11; do \
+        curl -sS https://bootstrap.pypa.io/get-pip.py | $PY; \
+    done
+
+# Install build tools
+RUN python3.10 -m pip install --no-cache-dir \
+    build \
+    wheel \
+    setuptools>=68 \
+    setuptools-scm>=8 \
+    auditwheel
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy source code
+COPY . /workspace/
+
+# Build wheels for all Python versions
+RUN for PY_VER in cp39-cp39 cp310-cp310 cp311-cp311; do \
+        echo "Building CPU wheel for ${PY_VER}..."; \
+        case $PY_VER in \
+            cp39*) PYTHON=python3.9 ;; \
+            cp310*) PYTHON=python3.10 ;; \
+            cp311*) PYTHON=python3.11 ;; \
+        esac; \
+        \
+        # Install build dependencies
+        $PYTHON -m pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu; \
+        $PYTHON -m pip install --no-cache-dir build wheel setuptools>=68 setuptools-scm>=8; \
+        \
+        # Build wheel
+        BUILD_CUDA=cpu $PYTHON -m build --wheel --outdir /tmp/wheels; \
+    done
+
+# Repair wheels for manylinux compatibility
+RUN mkdir -p /dist && \
+    for wheel in /tmp/wheels/*.whl; do \
+        echo "Repairing wheel: $(basename $wheel)"; \
+        auditwheel repair "$wheel" --plat manylinux_2_28_x86_64 -w /dist || \
+        cp "$wheel" /dist/; \
+    done
+
+# List built wheels
+RUN echo "Built wheels:" && ls -lh /dist/
+
+# Default command: copy wheels to mounted /dist volume
+CMD ["sh", "-c", "cp /dist/*.whl /output/ 2>/dev/null || echo 'Mount /output volume to extract wheels'; ls -lh /dist/"]

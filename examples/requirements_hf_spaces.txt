@@ -1,0 +1,24 @@
+# Unified dependencies for Hugging Face Spaces deployment
+# Matches pyproject.toml exactly for consistency
+
+# PyTorch with CUDA 11.8 (for GPU Spaces)
+--extra-index-url https://download.pytorch.org/whl/cu118
+torch>=2.1,<2.7
+torchvision>=0.16
+
+# Core dependencies (from pyproject.toml)
+transformers>=4.45,<5.0
+timm>=0.9.0
+accelerate>=1.0
+safetensors>=0.4.0
+pillow>=9.0
+numpy>=1.21
+
+# Gradio for UI
+gradio>=4.0
+
+# Optional: scikit-image for advanced visualizations
+scikit-image>=0.19
+
+# Install VLM-FO1 from GitHub
+git+https://github.com/om-ai-lab/VLM-FO1.git
