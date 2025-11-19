@@ -21,7 +21,7 @@ jobs:
   # Build wheels for different Python versions and CUDA variants
   build-wheels:
     name: Build ${{ matrix.build_cuda }} wheel (Python ${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -86,7 +86,7 @@ jobs:
   test-cpu:
     name: Test CPU wheel (Python ${{ matrix.python-version }})
     needs: build-wheels
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix:
@@ -126,7 +126,7 @@ jobs:
   # Smoke test documentation (no actual GPU required)
   smoke-test-docs:
     name: Validate GPU smoke test syntax
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -149,7 +149,7 @@ jobs:
   publish-release:
     name: Publish to GitHub Releases
     needs: [build-wheels, test-cpu]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
