@@ -558,12 +558,24 @@ def prepare_inputs(model_name, model, image_processors, tokenizer, messages, dev
 
     prompt = ""
     input_tokens = []
-    image_urls = []
+    final_image_urls = []
+    final_bbox_list = []
     # Compose prompt and accumulate all components from provided messages
     for message in messages:
-        inp, context_tokens, image_urls, bbox_list = make_message_context(tokenizer, message)
+        inp, context_tokens, msg_image_urls, msg_bbox_list = make_message_context(tokenizer, message)
         prompt += inp
         input_tokens.extend(context_tokens)
+        
+        if msg_image_urls:
+            final_image_urls.extend(msg_image_urls)
+            for _ in msg_image_urls:
+                if msg_bbox_list:
+                    final_bbox_list.append(msg_bbox_list)
+                else:
+                    final_bbox_list.append([])
+    
+    image_urls = final_image_urls
+    bbox_list = final_bbox_list
 
     # Ensure a system prompt at start, if not already present.
     if "system" not in prompt:
@@ -589,6 +601,11 @@ def prepare_inputs(model_name, model, image_processors, tokenizer, messages, dev
         images = [load_image(i) for i in image_urls]
         # print('original images[0].size:', images[0].size)
         images, bbox_list = resize_shortest_edge_images_and_bboxes(images, bbox_list, max_size=2048)
+        
+        # Flatten bbox_list if it's a list of lists (returned by resize when input is list of lists)
+        if bbox_list and isinstance(bbox_list[0], list):
+             bbox_list = [b for sublist in bbox_list for b in sublist]
+
         # print('resized images[0].size:', images[0].size)
     
         # When region-indexed tokens are enabled
