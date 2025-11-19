@@ -31,7 +31,8 @@ except ImportError:  # fallback for older torch releases
         return _torch_amp_autocast(enabled=enabled)
 
 try:
-    from ..functions import MSDeformAttnFunction
+    from ..functions import MSDeformAttnFunction, ms_deform_attn_core_pytorch
+    from .. import is_native_extension_available
 except:
     warnings.warn("Failed to import MSDeformAttnFunction.")
 
@@ -201,6 +202,16 @@ class MSDeformAttn(nn.Module):
                 self.im2col_step,
             )
             output = output.to(torch.float16)
+            output = self.output_proj(output)
+            return output
+
+        if not is_native_extension_available():
+            output = ms_deform_attn_core_pytorch(
+                value, 
+                input_spatial_shapes, 
+                sampling_locations, 
+                attention_weights
+            )
             output = self.output_proj(output)
             return output
 
