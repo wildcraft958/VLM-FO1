@@ -5,7 +5,7 @@ from safetensors.torch import load_file
 import os
 
 
-def load_pretrained_model(model_path, load_8bit=False, load_4bit=False, device="cuda"):
+def load_pretrained_model(model_path, load_8bit=False, load_4bit=False, device="cuda", attn_implementation="flash_attention_2"):
     """
     Loads a pretrained model along with its vision towers (and associated image processors).
     This function supports loading in 8bit/4bit precision and explicit device placement.
@@ -15,6 +15,7 @@ def load_pretrained_model(model_path, load_8bit=False, load_4bit=False, device="
         load_8bit (bool): Whether to load the model in 8bit mode.
         load_4bit (bool): Whether to load the model in 4bit mode.
         device (str): Device to load model onto, e.g., "cuda" or "cpu".
+        attn_implementation (str): Attention implementation to use. Defaults to "flash_attention_2".
 
     Returns:
         tuple: (tokenizer, model, image_processor)
@@ -41,7 +42,7 @@ def load_pretrained_model(model_path, load_8bit=False, load_4bit=False, device="
                 model_path,
                 low_cpu_mem_usage=True,
                 output_loading_info=True,
-                attn_implementation="flash_attention_2",
+                attn_implementation=attn_implementation,
                 **kwargs
             )
             # print(f'OmChatQwen25VLForCausalLM loading_info: {loading_info}')

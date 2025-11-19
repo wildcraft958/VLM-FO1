@@ -52,18 +52,24 @@ from .configuration_qwen2_5_vl import Qwen2_5_VLConfig, Qwen2_5_VLVisionConfig
 
 
 if is_flash_attn_2_available():
-    from flash_attn import flash_attn_varlen_func
-    from flash_attn.layers.rotary import apply_rotary_emb
-
+    try:
+        from flash_attn import flash_attn_varlen_func
+        from flash_attn.layers.rotary import apply_rotary_emb
+    except ImportError:
+        flash_attn_varlen_func = None
+        apply_rotary_emb = None
 else:
     flash_attn_varlen_func = None
     apply_rotary_emb = None
 
 
 if is_flash_attn_2_available():
-    from transformers.modeling_flash_attention_utils import _flash_attention_forward
+    try:
+        from transformers.modeling_flash_attention_utils import _flash_attention_forward
+    except ImportError:
+        _flash_attention_forward = None
 else:
-    flash_attn_varlen_func = None
+    _flash_attention_forward = None
 
 
 logger = logging.get_logger(__name__)
