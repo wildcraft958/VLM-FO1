@@ -190,7 +190,11 @@ class Qwen2_5_VlVisionTower(nn.Module):
         self.min_pixels = min_pixels
         self.max_pixels = max_pixels
         self.delay_load = delay_load
-        print (f"Qwen2_5_VlVisionTower loading_info: delay_load: {delay_load} min_pixels: {min_pixels} max_pixels: {max_pixels}")
+        
+        # Get attention implementation from config, default to "flash_attention_2" for backward compatibility
+        self.attn_implementation = getattr(args, "_attn_implementation", "flash_attention_2")
+        
+        print (f"Qwen2_5_VlVisionTower loading_info: delay_load: {delay_load} min_pixels: {min_pixels} max_pixels: {max_pixels} attn_implementation: {self.attn_implementation}")
 
         # if not delay_load:
         #     self.load_model()
@@ -205,7 +209,7 @@ class Qwen2_5_VlVisionTower(nn.Module):
         Actually load Qwen2.5 Vision Tower backbone and processor.
         Sets up the image tower and patch feed pipeline.
         """
-        self.image_tower = Qwen2_5_VisionTransformerPretrainedModel._from_config(self.cfg_only, attn_implementation="flash_attention_2", torch_dtype=torch.bfloat16)
+        self.image_tower = Qwen2_5_VisionTransformerPretrainedModel._from_config(self.cfg_only, attn_implementation=self.attn_implementation, torch_dtype=torch.bfloat16)
         # print(f'Qwen2_5_VlVisionTower loading_info: {loading_info}')
 
         if model_path is not None:
