@@ -38,6 +38,16 @@ def load_pretrained_model(model_path, load_8bit=False, load_4bit=False, device="
         tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
         # If this is the Qwen2.5-VL variant, load with additional kwargs
         if 'qwen2.5-vl' in model_path.lower() or 'qwen2_5_vl' in model_path.lower():
+            # Check for Flash Attention 2 availability if requested
+            if attn_implementation == "flash_attention_2":
+                try:
+                    import flash_attn
+                except ImportError:
+                    print("WARNING: Flash Attention 2 is requested but 'flash_attn' is not installed.")
+                    print("Falling back to 'sdpa' (Scaled Dot Product Attention) to prevent crash.")
+                    print("To use Flash Attention 2, please install it: pip install flash-attn --no-build-isolation")
+                    attn_implementation = "sdpa"
+            
             model, loading_info = OmChatQwen25VLForCausalLM.from_pretrained(
                 model_path,
                 low_cpu_mem_usage=True,
