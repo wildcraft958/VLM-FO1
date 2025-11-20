@@ -112,11 +112,20 @@ class VLMInference:
 
         print(f"Processing request for: '{prompt}'")
         
-        # Load Image
-        if image_url.startswith("http"):
+        # Load Image - Support both URLs and base64 data URLs
+        if image_url.startswith("data:image"):
+            # Handle base64 data URL (from file upload)
+            import base64
+            # Extract base64 data after comma
+            base64_data = image_url.split(",", 1)[1]
+            image_data = base64.b64decode(base64_data)
+            img = Image.open(BytesIO(image_data)).convert("RGB")
+        elif image_url.startswith("http"):
+            # Handle regular URL
             response = requests.get(image_url)
             img = Image.open(BytesIO(response.content)).convert("RGB")
         else:
+            # Handle local file path (for testing)
             img = Image.open(image_url).convert("RGB")
 
         # Step 1: Get region proposals from UPN
