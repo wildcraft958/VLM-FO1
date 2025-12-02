@@ -9,6 +9,8 @@ function App() {
   const [prompt, setPrompt] = useState('cat');
   const [threshold, setThreshold] = useState(0.3);
   const [taskType, setTaskType] = useState('Object Detection');
+  const [useSam3, setUseSam3] = useState(false);
+  const [sam3Confidence, setSam3Confidence] = useState(0.5);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [results, setResults] = useState(null);
@@ -24,7 +26,7 @@ function App() {
     setResults(null);
 
     try {
-      const data = await detectObjects(imageUrl, prompt, threshold);
+      const data = await detectObjects(imageUrl, prompt, threshold, useSam3, sam3Confidence);
       setResults(data);
     } catch (err) {
       setError(err.message || 'Failed to detect objects');
@@ -42,7 +44,7 @@ function App() {
             🔍 VLM-FO1 Object Detection
           </h1>
           <p className="mt-2 text-sm text-gray-600">
-            Powered by UPN + VLM-FO1 on Modal A100 GPUs
+            Powered by VLM-FO1 on Modal A10G GPUs {useSam3 ? 'with SAM3' : ''}
           </p>
         </div>
       </div>
@@ -60,6 +62,10 @@ function App() {
               setThreshold={setThreshold}
               taskType={taskType}
               setTaskType={setTaskType}
+              useSam3={useSam3}
+              setUseSam3={setUseSam3}
+              sam3Confidence={sam3Confidence}
+              setSam3Confidence={setSam3Confidence}
               onDetect={handleDetection}
               loading={loading}
             />

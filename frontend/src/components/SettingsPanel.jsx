@@ -5,6 +5,10 @@ export default function SettingsPanel({
     setThreshold,
     taskType,
     setTaskType,
+    useSam3,
+    setUseSam3,
+    sam3Confidence,
+    setSam3Confidence,
     onDetect,
     loading
 }) {
@@ -15,6 +19,57 @@ export default function SettingsPanel({
             <h2 className="text-xl font-semibold text-gray-900 mb-4">
                 ⚙️ Settings
             </h2>
+
+            {/* SAM3 Toggle */}
+            <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex items-center justify-between">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700">
+                            Use SAM3 for Proposals
+                        </label>
+                        <p className="text-xs text-gray-500 mt-1">
+                            {useSam3 
+                                ? "Using SAM3 for text-conditioned bbox proposals (better for complex prompts)"
+                                : "Using manual bbox proposals (faster, simpler prompts)"}
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setUseSam3(!useSam3)}
+                        className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${
+                            useSam3 ? 'bg-indigo-600' : 'bg-gray-200'
+                        }`}
+                    >
+                        <span
+                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                                useSam3 ? 'translate-x-5' : 'translate-x-0'
+                            }`}
+                        />
+                    </button>
+                </div>
+            </div>
+
+            {/* SAM3 Confidence Threshold (only show when SAM3 is enabled) */}
+            {useSam3 && (
+                <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                        SAM3 Confidence: {sam3Confidence.toFixed(2)}
+                    </label>
+                    <input
+                        type="range"
+                        min="0.1"
+                        max="0.9"
+                        step="0.1"
+                        value={sam3Confidence}
+                        onChange={(e) => setSam3Confidence(parseFloat(e.target.value))}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>More proposals</span>
+                        <span>Higher confidence</span>
+                    </div>
+                </div>
+            )}
 
             {/* Prompt */}
             <div className="mb-4">
@@ -51,25 +106,27 @@ export default function SettingsPanel({
                 </select>
             </div>
 
-            {/* Threshold */}
-            <div className="mb-6">
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Detection Threshold: {threshold.toFixed(2)}
-                </label>
-                <input
-                    type="range"
-                    min="0.1"
-                    max="0.9"
-                    step="0.1"
-                    value={threshold}
-                    onChange={(e) => setThreshold(parseFloat(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                />
-                <div className="flex justify-between text-xs text-gray-500 mt-1">
-                    <span>More detections</span>
-                    <span>Higher confidence</span>
+            {/* Threshold (only show when SAM3 is disabled) */}
+            {!useSam3 && (
+                <div className="mb-6">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Detection Threshold: {threshold.toFixed(2)}
+                    </label>
+                    <input
+                        type="range"
+                        min="0.1"
+                        max="0.9"
+                        step="0.1"
+                        value={threshold}
+                        onChange={(e) => setThreshold(parseFloat(e.target.value))}
+                        className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                        <span>More detections</span>
+                        <span>Higher confidence</span>
+                    </div>
                 </div>
-            </div>
+            )}
 
             {/* Detect Button */}
             <button
