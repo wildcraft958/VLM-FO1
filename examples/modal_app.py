@@ -37,9 +37,30 @@ vlm_fo1_image = (
         "safetensors>=0.4.0",
         "pillow>=9.0",
         "numpy>=1.21",
+        "fastapi",  # Required for web endpoints
+        "uvicorn[standard]",  # ASGI server for FastAPI
+        "python-multipart",  # For FastAPI form data
     )
     # Install SAM3 for bbox proposals (optional, but recommended)
-    .pip_install("git+https://github.com/facebookresearch/sam3.git")
+    # Note: SAM3 requires access to checkpoints from HuggingFace
+    # Install SAM3 dependencies first
+    .pip_install(
+        "einops",
+        "decord",
+        "pycocotools",
+        "opencv-python",  # SAM3 dependency
+        "scikit-image",  # SAM3 dependency for visualization
+        "huggingface-hub",  # For downloading SAM3 checkpoints
+        "matplotlib",  # SAM3 visualization dependency
+    )
+    # Install SAM3 by cloning and installing in editable mode
+    # This ensures all submodules and internal packages are properly included
+    .run_commands(
+        "cd /tmp && "
+        "git clone --depth 1 --recursive https://github.com/facebookresearch/sam3.git sam3_repo && "
+        "cd sam3_repo && "
+        "pip install -e ."
+    )
     # Copy local VLM-FO1 codebase (don't install, just add to path like modal_inference.py)
     # This avoids setuptools-scm version detection issues
     .add_local_dir("vlm_fo1", remote_path="/root/vlm_fo1")
@@ -307,261 +328,225 @@ def run_inference_with_sam3(
 
 
 # Web endpoints for frontend integration
+# Using asgi_app for full FastAPI control with CORS support
 @app.function(
     image=vlm_fo1_image,
     gpu="A10G",
     timeout=600,
     volumes={"/models": model_volume},
 )
-@modal.fastapi_endpoint(method="POST")
-def web_inference(item: dict):
-    """
-    Web endpoint for VLM-FO1 inference with manual bbox proposals.
-    
-    Expects: {"image_url": "...", "query": "..."}
-    Returns: {"output": "...", "bboxes": {...}, "image_size": [...]}
-    """
+@modal.asgi_app()
+def web_api():
+    """FastAPI app with CORS support for web endpoints."""
+    from fastapi import FastAPI, Response, Request
+    from fastapi.middleware.cors import CORSMiddleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request as StarletteRequest
     import base64
     from io import BytesIO
     from PIL import Image
     import tempfile
     import os
+    import json
     
-    image_url = item.get("image_url", "")
-    query = item.get("query", "orange")
+    app = FastAPI(title="VLM-FO1 Inference API")
     
-    # Handle base64 data URLs or regular URLs
-    if image_url.startswith("data:image"):
-        base64_data = image_url.split(",", 1)[1]
-        image_data = base64.b64decode(base64_data)
-        img = Image.open(BytesIO(image_data)).convert("RGB")
-        # Save to temp file for the inference function
-        temp_path = "/tmp/input_image.jpg"
-        img.save(temp_path)
-        image_path = temp_path
-    elif image_url.startswith("http"):
-        # For URLs, pass directly
-        image_path = image_url
-    else:
-        image_path = image_url
-    
-    result = run_inference.remote(image_path, query)
-    
-    # Format response for frontend
-    detections = []
-    for label, bbox_list in result.get("bboxes", {}).items():
-        for bbox in bbox_list:
-            detections.append({
-                "bbox": bbox,
-                "label": label,
-            })
-    
-    return {
-        "raw_output": result.get("output", ""),
-        "prompt": query,
-        "detected": len(detections) > 0,
-        "num_detections": len(detections),
-        "detections": detections,
-        "image_size": result.get("image_size", {}),
-    }
-
-
-@app.function(
-    image=vlm_fo1_image,
-    gpu="A10G",
-    timeout=600,
-    volumes={"/models": model_volume},
-)
-@modal.fastapi_endpoint(method="POST")
-def web_inference_sam3(item: dict):
-    """
-    Web endpoint for VLM-FO1 inference with SAM3 bbox proposals.
-    
-    Expects: {"image_url": "...", "query": "...", "confidence_threshold": 0.5, "max_proposals": 100}
-    Returns: {"output": "...", "bboxes": {...}, "sam3_proposals": {...}, "image_size": [...]}
-    """
-    import base64
-    from io import BytesIO
-    from PIL import Image
-    import tempfile
-    import os
-    
-    image_url = item.get("image_url", "")
-    query = item.get("query", "the ball nearest to the bear")
-    confidence_threshold = item.get("confidence_threshold", 0.5)
-    max_proposals = item.get("max_proposals", 100)
-    sam3_model_path = item.get("sam3_model_path", "/models/sam3/sam3.pt")
-    
-    # Handle base64 data URLs or regular URLs
-    if image_url.startswith("data:image"):
-        base64_data = image_url.split(",", 1)[1]
-        image_data = base64.b64decode(base64_data)
-        img = Image.open(BytesIO(image_data)).convert("RGB")
-        # Save to temp file for the inference function
-        temp_path = "/tmp/input_image.jpg"
-        img.save(temp_path)
-        image_path = temp_path
-    elif image_url.startswith("http"):
-        # For URLs, pass directly
-        image_path = image_url
-    else:
-        image_path = image_url
-    
-    result = run_inference_with_sam3.remote(
-        image_path,
-        query,
-        sam3_model_path=sam3_model_path,
-        confidence_threshold=confidence_threshold,
-        max_proposals=max_proposals,
+    # Add comprehensive CORS middleware to handle all frontend requests
+    # This allows requests from any origin (for development)
+    # In production, replace ["*"] with specific allowed origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],  # Allow all origins for development
+        allow_credentials=False,  # Must be False when using allow_origins=["*"]
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],  # Explicitly allow all methods
+        allow_headers=[
+            "Accept",
+            "Accept-Language",
+            "Content-Language",
+            "Content-Type",
+            "Authorization",
+            "X-Requested-With",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+        ],
+        expose_headers=["*"],  # Expose all headers to the frontend
+        max_age=3600,  # Cache preflight requests for 1 hour
     )
     
-    # Format response for frontend
-    detections = []
-    for label, bbox_list in result.get("bboxes", {}).items():
-        for bbox in bbox_list:
-            detections.append({
-                "bbox": bbox,
-                "label": label,
-            })
+    # Add a backup middleware to ensure CORS headers are always present on all responses
+    from starlette.middleware.base import BaseHTTPMiddleware
     
-    return {
-        "raw_output": result.get("output", ""),
-        "prompt": query,
-        "detected": len(detections) > 0,
-        "num_detections": len(detections),
-        "detections": detections,
-        "sam3_proposals": result.get("sam3_proposals", {}),
-        "image_size": result.get("image_size", {}),
-    }
-
-
-# Web endpoints for frontend integration
-@app.function(
-    image=vlm_fo1_image,
-    gpu="A10G",
-    timeout=600,
-    volumes={"/models": model_volume},
-)
-@modal.fastapi_endpoint(method="POST")
-def web_inference(item: dict):
-    """
-    Web endpoint for VLM-FO1 inference with manual bbox proposals.
+    class CORSBackupMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: StarletteRequest, call_next):
+            response = await call_next(request)
+            # Add CORS headers to all responses as backup
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Origin, Accept"
+            response.headers["Access-Control-Expose-Headers"] = "*"
+            return response
     
-    Expects: {"image_url": "...", "query": "..."}
-    Returns: {"output": "...", "bboxes": {...}, "image_size": [...]}
-    """
-    import base64
-    from io import BytesIO
-    from PIL import Image
-    import tempfile
-    import os
+    app.add_middleware(CORSBackupMiddleware)
     
-    image_url = item.get("image_url", "")
-    query = item.get("query", "orange")
+    # Add explicit OPTIONS handlers for CORS preflight (middleware should handle this, but explicit is safer)
+    @app.options("/web_inference")
+    async def options_web_inference():
+        """Handle CORS preflight requests for web_inference."""
+        return Response(
+            content="",
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Origin",
+                "Access-Control-Max-Age": "3600",
+            }
+        )
     
-    # Handle base64 data URLs or regular URLs
-    if image_url.startswith("data:image"):
-        base64_data = image_url.split(",", 1)[1]
-        image_data = base64.b64decode(base64_data)
-        img = Image.open(BytesIO(image_data)).convert("RGB")
-        # Save to temp file for the inference function
-        temp_path = "/tmp/input_image.jpg"
-        img.save(temp_path)
-        image_path = temp_path
-    elif image_url.startswith("http"):
-        # For URLs, pass directly
-        image_path = image_url
-    else:
-        image_path = image_url
+    @app.options("/web_inference_sam3")
+    async def options_web_inference_sam3():
+        """Handle CORS preflight requests for web_inference_sam3."""
+        return Response(
+            content="",
+            status_code=200,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With, Origin",
+                "Access-Control-Max-Age": "3600",
+            }
+        )
     
-    result = run_inference.remote(image_path, query)
+    # Add a health check endpoint
+    @app.get("/")
+    async def root():
+        """Health check endpoint."""
+        return {"status": "ok", "message": "VLM-FO1 Inference API is running"}
     
-    # Format response for frontend
-    detections = []
-    for label, bbox_list in result.get("bboxes", {}).items():
-        for bbox in bbox_list:
-            detections.append({
-                "bbox": bbox,
-                "label": label,
-            })
+    @app.post("/web_inference")
+    async def web_inference(item: dict):
+        """
+        Web endpoint for VLM-FO1 inference with manual bbox proposals.
+        
+        Expects: {"image_url": "...", "query": "..."}
+        Returns: {"output": "...", "bboxes": {...}, "image_size": [...]}
+        """
+        image_url = item.get("image_url", "")
+        query = item.get("query", "orange")
+        
+        # Handle base64 data URLs or regular URLs
+        if image_url.startswith("data:image"):
+            base64_data = image_url.split(",", 1)[1]
+            image_data = base64.b64decode(base64_data)
+            img = Image.open(BytesIO(image_data)).convert("RGB")
+            # Save to temp file for the inference function
+            temp_path = "/tmp/input_image.jpg"
+            img.save(temp_path)
+            image_path = temp_path
+        elif image_url.startswith("http"):
+            # For URLs, pass directly
+            image_path = image_url
+        else:
+            image_path = image_url
+        
+        result = run_inference.remote(image_path, query)
+        
+        # Format response for frontend
+        detections = []
+        for label, bbox_list in result.get("bboxes", {}).items():
+            for bbox in bbox_list:
+                detections.append({
+                    "bbox": bbox,
+                    "label": label,
+                })
+        
+        # Return response with explicit CORS headers (backup to middleware)
+        response_data = {
+            "raw_output": result.get("output", ""),
+            "prompt": query,
+            "detected": len(detections) > 0,
+            "num_detections": len(detections),
+            "detections": detections,
+            "image_size": result.get("image_size", {}),
+        }
+        return Response(
+            content=json.dumps(response_data),
+            media_type="application/json",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+            }
+        )
     
-    return {
-        "raw_output": result.get("output", ""),
-        "prompt": query,
-        "detected": len(detections) > 0,
-        "num_detections": len(detections),
-        "detections": detections,
-        "image_size": result.get("image_size", {}),
-    }
-
-
-@app.function(
-    image=vlm_fo1_image,
-    gpu="A10G",
-    timeout=600,
-    volumes={"/models": model_volume},
-)
-@modal.fastapi_endpoint(method="POST")
-def web_inference_sam3(item: dict):
-    """
-    Web endpoint for VLM-FO1 inference with SAM3 bbox proposals.
+    @app.post("/web_inference_sam3")
+    async def web_inference_sam3(item: dict):
+        """
+        Web endpoint for VLM-FO1 inference with SAM3 bbox proposals.
+        
+        Expects: {"image_url": "...", "query": "...", "confidence_threshold": 0.5, "max_proposals": 100}
+        Returns: {"output": "...", "bboxes": {...}, "sam3_proposals": {...}, "image_size": [...]}
+        """
+        image_url = item.get("image_url", "")
+        query = item.get("query", "the ball nearest to the bear")
+        confidence_threshold = item.get("confidence_threshold", 0.5)
+        max_proposals = item.get("max_proposals", 100)
+        sam3_model_path = item.get("sam3_model_path", "/models/sam3/sam3.pt")
+        
+        # Handle base64 data URLs or regular URLs
+        if image_url.startswith("data:image"):
+            base64_data = image_url.split(",", 1)[1]
+            image_data = base64.b64decode(base64_data)
+            img = Image.open(BytesIO(image_data)).convert("RGB")
+            # Save to temp file for the inference function
+            temp_path = "/tmp/input_image.jpg"
+            img.save(temp_path)
+            image_path = temp_path
+        elif image_url.startswith("http"):
+            # For URLs, pass directly
+            image_path = image_url
+        else:
+            image_path = image_url
+        
+        result = run_inference_with_sam3.remote(
+            image_path,
+            query,
+            sam3_model_path=sam3_model_path,
+            confidence_threshold=confidence_threshold,
+            max_proposals=max_proposals,
+        )
+        
+        # Format response for frontend
+        detections = []
+        for label, bbox_list in result.get("bboxes", {}).items():
+            for bbox in bbox_list:
+                detections.append({
+                    "bbox": bbox,
+                    "label": label,
+                })
+        
+        # Return response with explicit CORS headers (backup to middleware)
+        response_data = {
+            "raw_output": result.get("output", ""),
+            "prompt": query,
+            "detected": len(detections) > 0,
+            "num_detections": len(detections),
+            "detections": detections,
+            "sam3_proposals": result.get("sam3_proposals", {}),
+            "image_size": result.get("image_size", {}),
+        }
+        return Response(
+            content=json.dumps(response_data),
+            media_type="application/json",
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
+                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+            }
+        )
     
-    Expects: {"image_url": "...", "query": "...", "confidence_threshold": 0.5, "max_proposals": 100}
-    Returns: {"output": "...", "bboxes": {...}, "sam3_proposals": {...}, "image_size": [...]}
-    """
-    import base64
-    from io import BytesIO
-    from PIL import Image
-    import tempfile
-    import os
-    
-    image_url = item.get("image_url", "")
-    query = item.get("query", "the ball nearest to the bear")
-    confidence_threshold = item.get("confidence_threshold", 0.5)
-    max_proposals = item.get("max_proposals", 100)
-    sam3_model_path = item.get("sam3_model_path", "/models/sam3/sam3.pt")
-    
-    # Handle base64 data URLs or regular URLs
-    if image_url.startswith("data:image"):
-        base64_data = image_url.split(",", 1)[1]
-        image_data = base64.b64decode(base64_data)
-        img = Image.open(BytesIO(image_data)).convert("RGB")
-        # Save to temp file for the inference function
-        temp_path = "/tmp/input_image.jpg"
-        img.save(temp_path)
-        image_path = temp_path
-    elif image_url.startswith("http"):
-        # For URLs, pass directly
-        image_path = image_url
-    else:
-        image_path = image_url
-    
-    result = run_inference_with_sam3.remote(
-        image_path,
-        query,
-        sam3_model_path=sam3_model_path,
-        confidence_threshold=confidence_threshold,
-        max_proposals=max_proposals,
-    )
-    
-    # Format response for frontend
-    detections = []
-    for label, bbox_list in result.get("bboxes", {}).items():
-        for bbox in bbox_list:
-            detections.append({
-                "bbox": bbox,
-                "label": label,
-            })
-    
-    return {
-        "raw_output": result.get("output", ""),
-        "prompt": query,
-        "detected": len(detections) > 0,
-        "num_detections": len(detections),
-        "detections": detections,
-        "sam3_proposals": result.get("sam3_proposals", {}),
-        "image_size": result.get("image_size", {}),
-    }
+    return app
 
 
 @app.local_entrypoint()

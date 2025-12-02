@@ -1,9 +1,10 @@
 import axios from 'axios';
 
-// Update these URLs after deploying modal_app.py
-// Get the URLs from: modal app list vlm-fo1-inference
-const API_URL_BASE = 'https://YOUR-WORKSPACE--vlm-fo1-inference-web-inference.modal.run';
-const API_URL_SAM3 = 'https://YOUR-WORKSPACE--vlm-fo1-inference-web-inference-sam3.modal.run';
+// Modal API endpoints - deployed at:
+// https://aryan-don357--vlm-fo1-inference-web-api.modal.run
+const API_BASE_URL = 'https://aryan-don357--vlm-fo1-inference-web-api.modal.run';
+const API_URL_BASE = `${API_BASE_URL}/web_inference`;
+const API_URL_SAM3 = `${API_BASE_URL}/web_inference_sam3`;
 
 // Legacy endpoint (from modal_inference.py)
 const API_URL_LEGACY = 'https://animeshraj958--vlm-fo1-inference-vlminference-web-generate.modal.run';
