@@ -70,6 +70,9 @@ vlm_fo1_image = (
 # Mount for storing models (persists across runs)
 model_volume = modal.Volume.from_name("vlm-fo1-models", create_if_missing=True)
 
+# HuggingFace secret for accessing gated repositories (e.g., SAM3)
+hf_secret = modal.Secret.from_name("huggingface-secret")
+
 
 @app.function(
     image=vlm_fo1_image,
@@ -169,9 +172,11 @@ def run_inference(image_path: str, query: str = "orange", use_upn: bool = False)
     gpu="A10G",  # or "T4", "A100"
     timeout=600,
     volumes={"/models": model_volume},
+    secrets=[hf_secret],  # Add HF secret for SAM3 access
 )
 def run_inference_with_sam3(
-    image_path: str,
+    image_path: str = None,
+    image_bytes: bytes = None,
     query: str = "the ball nearest to the bear",
     sam3_model_path: str = "/models/sam3/sam3.pt",
     confidence_threshold: float = 0.5,
@@ -181,7 +186,8 @@ def run_inference_with_sam3(
     Run VLM-FO1 inference on Modal with SAM3 as bbox proposal generator.
 
     Args:
-        image_path: Path to image file
+        image_path: Path to image file or URL (optional if image_bytes provided)
+        image_bytes: Raw image bytes (optional if image_path provided)
         query: Text prompt describing the object to detect (e.g., "the ball nearest to the bear")
         sam3_model_path: Path to SAM3 checkpoint (default: /models/sam3/sam3.pt)
         confidence_threshold: Confidence threshold for SAM3 proposals (default: 0.5)
@@ -215,12 +221,35 @@ def run_inference_with_sam3(
         print(f"CUDA version: {torch.version.cuda}")
         print(f"GPU: {torch.cuda.get_device_name(0)}")
 
+    # Set HuggingFace token from secret for accessing gated repositories
+    # The secret should have HF_TOKEN or HUGGINGFACE_HUB_TOKEN key
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+    if hf_token:
+        os.environ["HF_TOKEN"] = hf_token
+        os.environ["HUGGINGFACE_HUB_TOKEN"] = hf_token
+        # Login to HuggingFace Hub to authenticate
+        try:
+            from huggingface_hub import login
+            login(token=hf_token, add_to_git_credential=False)
+            print("✓ HuggingFace token found and authenticated for gated repositories")
+        except Exception as e:
+            print(f"⚠ Warning: Failed to login to HuggingFace: {e}")
+            print("Continuing anyway - token may still work...")
+    else:
+        print("⚠ Warning: No HuggingFace token found. SAM3 may fail if it requires authentication.")
+        print("Make sure your Modal secret 'huggingface-secret' has 'HF_TOKEN' or 'HUGGINGFACE_HUB_TOKEN' key.")
+    
     # Load SAM3 model
     print(f"Loading SAM3 model from: {sam3_model_path}")
     if not os.path.exists(sam3_model_path):
         # Try to download or use default HuggingFace model
         print(f"SAM3 checkpoint not found at {sam3_model_path}, trying to load from HuggingFace...")
-        sam3_model = build_sam3_image_model(device="cuda")
+        try:
+            sam3_model = build_sam3_image_model(device="cuda")
+        except Exception as e:
+            print(f"❌ Error loading SAM3 from HuggingFace: {e}")
+            print("Make sure you have access to the SAM3 repository and your HF token is set correctly.")
+            raise
     else:
         sam3_model = build_sam3_image_model(checkpoint_path=sam3_model_path, device="cuda")
     
@@ -238,7 +267,30 @@ def run_inference_with_sam3(
     print("VLM-FO1 model loaded successfully")
 
     # Load and preprocess image
-    img = Image.open(image_path).convert("RGB")
+    # Support both file path and image bytes - prioritize bytes for web endpoints
+    from io import BytesIO
+    
+    if image_bytes is not None:
+        # Use image bytes directly (preferred for web endpoints)
+        img = Image.open(BytesIO(image_bytes)).convert("RGB")
+        print(f"Image loaded from bytes: {img.size}")
+    elif image_path and image_path.startswith("http"):
+        # Download from URL
+        import requests
+        print(f"Downloading image from URL: {image_path}")
+        response = requests.get(image_path, timeout=30)
+        response.raise_for_status()
+        img = Image.open(BytesIO(response.content)).convert("RGB")
+        print(f"Image downloaded and loaded: {img.size}")
+    elif image_path and os.path.exists(image_path):
+        # Load from file path
+        img = Image.open(image_path).convert("RGB")
+        print(f"Image loaded from file: {img.size}")
+    else:
+        raise ValueError(
+            f"Image not found. image_path={image_path}, has_bytes={image_bytes is not None}. "
+            "Provide either image_path (existing file or URL) or image_bytes."
+        )
     print(f"Image loaded: {img.size}")
 
     # Run SAM3 to get fine-grained object proposals
@@ -334,6 +386,7 @@ def run_inference_with_sam3(
     gpu="A10G",
     timeout=600,
     volumes={"/models": model_volume},
+    secrets=[hf_secret],  # Add HF secret for SAM3 access in web endpoints
 )
 @modal.asgi_app()
 def web_api():
@@ -379,8 +432,20 @@ def web_api():
     
     class CORSBackupMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: StarletteRequest, call_next):
-            response = await call_next(request)
-            # Add CORS headers to all responses as backup
+            try:
+                response = await call_next(request)
+            except Exception as e:
+                # Even on errors, return CORS headers
+                from starlette.responses import JSONResponse
+                import traceback
+                response = JSONResponse(
+                    content={
+                        "error": str(e),
+                        "type": type(e).__name__,
+                    },
+                    status_code=500
+                )
+            # Add CORS headers to all responses (including errors) - CRITICAL
             response.headers["Access-Control-Allow-Origin"] = "*"
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH"
             response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Origin, Accept"
@@ -488,63 +553,98 @@ def web_api():
         Expects: {"image_url": "...", "query": "...", "confidence_threshold": 0.5, "max_proposals": 100}
         Returns: {"output": "...", "bboxes": {...}, "sam3_proposals": {...}, "image_size": [...]}
         """
-        image_url = item.get("image_url", "")
-        query = item.get("query", "the ball nearest to the bear")
-        confidence_threshold = item.get("confidence_threshold", 0.5)
-        max_proposals = item.get("max_proposals", 100)
-        sam3_model_path = item.get("sam3_model_path", "/models/sam3/sam3.pt")
-        
-        # Handle base64 data URLs or regular URLs
-        if image_url.startswith("data:image"):
-            base64_data = image_url.split(",", 1)[1]
-            image_data = base64.b64decode(base64_data)
-            img = Image.open(BytesIO(image_data)).convert("RGB")
-            # Save to temp file for the inference function
-            temp_path = "/tmp/input_image.jpg"
-            img.save(temp_path)
-            image_path = temp_path
-        elif image_url.startswith("http"):
-            # For URLs, pass directly
-            image_path = image_url
-        else:
-            image_path = image_url
-        
-        result = run_inference_with_sam3.remote(
-            image_path,
-            query,
-            sam3_model_path=sam3_model_path,
-            confidence_threshold=confidence_threshold,
-            max_proposals=max_proposals,
-        )
-        
-        # Format response for frontend
-        detections = []
-        for label, bbox_list in result.get("bboxes", {}).items():
-            for bbox in bbox_list:
-                detections.append({
-                    "bbox": bbox,
-                    "label": label,
-                })
-        
-        # Return response with explicit CORS headers (backup to middleware)
-        response_data = {
-            "raw_output": result.get("output", ""),
-            "prompt": query,
-            "detected": len(detections) > 0,
-            "num_detections": len(detections),
-            "detections": detections,
-            "sam3_proposals": result.get("sam3_proposals", {}),
-            "image_size": result.get("image_size", {}),
-        }
-        return Response(
-            content=json.dumps(response_data),
-            media_type="application/json",
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+        try:
+            # Ensure HF token is set for SAM3 access (secret should provide this via environment)
+            hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
+            if hf_token:
+                os.environ["HF_TOKEN"] = hf_token
+                os.environ["HUGGINGFACE_HUB_TOKEN"] = hf_token
+            
+            image_url = item.get("image_url", "")
+            query = item.get("query", "the ball nearest to the bear")
+            confidence_threshold = item.get("confidence_threshold", 0.5)
+            max_proposals = item.get("max_proposals", 100)
+            sam3_model_path = item.get("sam3_model_path", "/models/sam3/sam3.pt")
+            
+            # Handle base64 data URLs or regular URLs
+            # Pass image bytes directly to avoid file system issues across Modal function calls
+            image_bytes = None
+            image_path_for_remote = None
+            
+            if image_url.startswith("data:image"):
+                base64_data = image_url.split(",", 1)[1]
+                image_bytes = base64.b64decode(base64_data)
+                # Don't save to file - pass bytes directly
+            elif image_url.startswith("http"):
+                # For URLs, pass the URL directly
+                image_path_for_remote = image_url
+            else:
+                # Assume it's a file path (unlikely in web context, but handle it)
+                image_path_for_remote = image_url
+            
+            # Call remote function with image bytes or path
+            if image_bytes is not None:
+                result = run_inference_with_sam3.remote(
+                    image_bytes=image_bytes,
+                    query=query,
+                    sam3_model_path=sam3_model_path,
+                    confidence_threshold=confidence_threshold,
+                    max_proposals=max_proposals,
+                )
+            else:
+                result = run_inference_with_sam3.remote(
+                    image_path=image_path_for_remote,
+                    query=query,
+                    sam3_model_path=sam3_model_path,
+                    confidence_threshold=confidence_threshold,
+                    max_proposals=max_proposals,
+                )
+            
+            # Format response for frontend
+            detections = []
+            for label, bbox_list in result.get("bboxes", {}).items():
+                for bbox in bbox_list:
+                    detections.append({
+                        "bbox": bbox,
+                        "label": label,
+                    })
+            
+            # Return response with explicit CORS headers (backup to middleware)
+            response_data = {
+                "raw_output": result.get("output", ""),
+                "prompt": query,
+                "detected": len(detections) > 0,
+                "num_detections": len(detections),
+                "detections": detections,
+                "sam3_proposals": result.get("sam3_proposals", {}),
+                "image_size": result.get("image_size", {}),
             }
-        )
+            return Response(
+                content=json.dumps(response_data),
+                media_type="application/json",
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
+                    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+                }
+            )
+        except Exception as e:
+            # Return error with CORS headers
+            import traceback
+            error_response = {
+                "error": str(e),
+                "type": type(e).__name__,
+            }
+            return Response(
+                content=json.dumps(error_response),
+                media_type="application/json",
+                status_code=500,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "POST, OPTIONS, GET",
+                    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Requested-With",
+                }
+            )
     
     return app
 
