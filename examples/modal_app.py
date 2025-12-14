@@ -269,11 +269,23 @@ def run_inference_with_sam3(
     # Load and preprocess image
     # Support both file path and image bytes - prioritize bytes for web endpoints
     from io import BytesIO
+    import tempfile
     
+    # We need a file path for prepare_inputs, so save to temp file if using bytes
     if image_bytes is not None:
         # Use image bytes directly (preferred for web endpoints)
         img = Image.open(BytesIO(image_bytes)).convert("RGB")
         print(f"Image loaded from bytes: {img.size}")
+        # Save to temp file so we have a path for prepare_inputs
+        # Use /tmp which is writable in Modal containers
+        import uuid
+        temp_filename = f"/tmp/vlm_fo1_image_{uuid.uuid4().hex[:8]}.jpg"
+        img.save(temp_filename)
+        image_path = temp_filename  # Use temp file path
+        print(f"Saved image to temp file: {image_path}")
+        # Verify file exists
+        if not os.path.exists(image_path):
+            raise ValueError(f"Failed to save image to temp file: {image_path}")
     elif image_path and image_path.startswith("http"):
         # Download from URL
         import requests
@@ -282,6 +294,7 @@ def run_inference_with_sam3(
         response.raise_for_status()
         img = Image.open(BytesIO(response.content)).convert("RGB")
         print(f"Image downloaded and loaded: {img.size}")
+        # Keep the URL as image_path for prepare_inputs
     elif image_path and os.path.exists(image_path):
         # Load from file path
         img = Image.open(image_path).convert("RGB")
@@ -291,7 +304,13 @@ def run_inference_with_sam3(
             f"Image not found. image_path={image_path}, has_bytes={image_bytes is not None}. "
             "Provide either image_path (existing file or URL) or image_bytes."
         )
-    print(f"Image loaded: {img.size}")
+    print(f"Image loaded: {img.size}, using path: {image_path}")
+    
+    # Ensure image_path is set and valid before proceeding
+    if not image_path:
+        raise ValueError("image_path must be set after loading image")
+    if not image_path.startswith("http") and not os.path.exists(image_path):
+        raise ValueError(f"image_path does not exist: {image_path}")
 
     # Run SAM3 to get fine-grained object proposals
     print(f"Running SAM3 with query: '{query}'")
@@ -312,13 +331,18 @@ def run_inference_with_sam3(
     print(f"Using top {len(boxes)} proposals (scores: {scores[:5].tolist()})")
 
     # Prepare chat messages with vision input and bounding boxes
+    # Ensure image_path is a valid string (not None)
+    image_url_for_messages = str(image_path) if image_path else ""
+    if not image_url_for_messages:
+        raise ValueError("Cannot create messages: image_path is empty")
+    
     messages = [
         {
             "role": "user",
             "content": [
                 {
                     "type": "image_url",
-                    "image_url": {"url": image_path},
+                    "image_url": {"url": image_url_for_messages},
                 },
                 {
                     "type": "text",
@@ -331,34 +355,88 @@ def run_inference_with_sam3(
 
     # Run VLM-FO1 inference
     print("Running VLM-FO1 inference...")
-    generation_kwargs = prepare_inputs(
-        model_path,
-        model,
-        image_processors,
-        tokenizer,
-        messages,
-        max_tokens=4096,
-        top_p=0.05,
-        temperature=0.0,
-        do_sample=False,
-    )
+    try:
+        generation_kwargs = prepare_inputs(
+            model_path,
+            model,
+            image_processors,
+            tokenizer,
+            messages,
+            max_tokens=4096,
+            top_p=0.05,
+            temperature=0.0,
+            do_sample=False,
+        )
+    except Exception as e:
+        import traceback
+        error_msg = f"Error in prepare_inputs: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg) from e
 
-    with torch.inference_mode():
-        output_ids = model.generate(**generation_kwargs)
+    try:
+        with torch.inference_mode():
+            output_ids = model.generate(**generation_kwargs)
+    except Exception as e:
+        import traceback
+        error_msg = f"Error in model.generate: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg) from e
 
-    outputs = tokenizer.decode(
-        output_ids[0, generation_kwargs['inputs'].shape[1]:],
-        skip_special_tokens=True
-    ).strip()
+    try:
+        outputs = tokenizer.decode(
+            output_ids[0, generation_kwargs['inputs'].shape[1]:],
+            skip_special_tokens=True
+        ).strip()
+    except Exception as e:
+        import traceback
+        error_msg = f"Error in tokenizer.decode: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ {error_msg}")
+        raise RuntimeError(error_msg) from e
 
     print(f"VLM-FO1 output: {outputs}")
 
     # Convert output prediction (indexes) to bounding box coordinates
-    bbox_indexes = extract_predictions_to_indexes(outputs)
+    # Handle multiple output formats like the gradio demos do
+    import re
+    
+    bbox_indexes = {}
+    
+    # First, try to extract structured format with <ground> and <objects> tags
+    if '<ground>' in outputs:
+        bbox_indexes = extract_predictions_to_indexes(outputs)
+        print(f"Extracted bbox_indexes from structured format: {bbox_indexes}")
+    else:
+        # Fallback: Check for <region\d+> tags directly in output
+        match_pattern = r"<region(\d+)>"
+        matches = re.findall(match_pattern, outputs)
+        if matches:
+            # Found region tags, create a prediction dict
+            region_indexes = set([int(m) for m in matches])
+            # Use the query as the label
+            bbox_indexes = {query.strip(): region_indexes}
+            print(f"Extracted region indexes from tags: {bbox_indexes}")
+        else:
+            # No tags found - model returned plain text
+            output_lower = outputs.lower().strip()
+            query_lower = query.lower().strip()
+            
+            # Check if output matches the query (model detected the object)
+            if query_lower in output_lower or output_lower in query_lower or len(output_lower.split()) <= 3:
+                print(f"Model returned simple label '{outputs}' without indexes. Using top proposals.")
+                # Use top proposals as detections - model detected it but didn't format correctly
+                label = outputs.strip()
+                # Use top 5 proposals by default when model doesn't specify indexes
+                top_n = min(5, len(boxes))
+                region_indexes = set(range(top_n))
+                bbox_indexes = {label: region_indexes}
+            else:
+                print(f"Warning: Could not extract bounding boxes from output: '{outputs}'")
+                bbox_indexes = {}
     
     # Map indexes to actual bounding boxes
     res = {}
     res_masks = []
+    
     for label, index_set in bbox_indexes.items():
         if label not in res:
             res[label] = []
@@ -366,6 +444,8 @@ def run_inference_with_sam3(
             if i < len(boxes):
                 res[label].append(boxes[i].tolist())
                 res_masks.append(masks[i].tolist())
+    
+    print(f"Final detections: {len(res)} labels, {sum(len(v) for v in res.values())} total boxes")
 
     return {
         "query": query,
@@ -489,6 +569,90 @@ def web_api():
         """Health check endpoint."""
         return {"status": "ok", "message": "VLM-FO1 Inference API is running"}
     
+    # Add an echo endpoint to test request reception
+    @app.post("/echo")
+    async def echo(item: dict):
+        """Echo endpoint to test if requests are being received."""
+        print(f"Echo endpoint called with keys: {list(item.keys())}")
+        return Response(
+            content=json.dumps({
+                "status": "success",
+                "message": "Request received",
+                "received_keys": list(item.keys()),
+                "data_types": {k: type(v).__name__ for k, v in item.items()},
+                "data_lengths": {k: len(str(v)) if isinstance(v, (str, bytes)) else "N/A" for k, v in item.items()}
+            }),
+            media_type="application/json",
+            headers={"Access-Control-Allow-Origin": "*"},
+        )
+    
+    # Add a test endpoint for base64 validation
+    @app.post("/test_base64")
+    async def test_base64(item: dict):
+        """Test endpoint to validate base64 image decoding without running inference."""
+        try:
+            print("test_base64 endpoint called")
+            image_base64 = item.get("image_base64", "")
+            image_url = item.get("image_url", "")
+            
+            if image_base64:
+                print(f"Testing image_base64 (length: {len(image_base64)})")
+                if image_base64.startswith("data:image"):
+                    base64_data = image_base64.split(",", 1)[1]
+                else:
+                    base64_data = image_base64
+                
+                image_bytes = base64.b64decode(base64_data, validate=True)
+                img = Image.open(BytesIO(image_bytes))
+                img.load()  # Force load to validate
+                img_size = img.size
+                img_format = img.format
+                img.close()  # Close after getting info
+                
+                return Response(
+                    content=json.dumps({
+                        "status": "success",
+                        "message": "Base64 image is valid",
+                        "image_size": img_size,
+                        "image_format": img_format,
+                        "decoded_bytes": len(image_bytes)
+                    }),
+                    media_type="application/json",
+                    headers={"Access-Control-Allow-Origin": "*"},
+                )
+            elif image_url:
+                return Response(
+                    content=json.dumps({
+                        "status": "success",
+                        "message": "image_url provided (not tested)",
+                        "image_url_length": len(image_url)
+                    }),
+                    media_type="application/json",
+                    headers={"Access-Control-Allow-Origin": "*"},
+                )
+            else:
+                return Response(
+                    content=json.dumps({
+                        "status": "error",
+                        "message": "No image_base64 or image_url provided"
+                    }),
+                    media_type="application/json",
+                    status_code=400,
+                    headers={"Access-Control-Allow-Origin": "*"},
+                )
+        except Exception as e:
+            import traceback
+            return Response(
+                content=json.dumps({
+                    "status": "error",
+                    "error": str(e),
+                    "traceback": traceback.format_exc()
+                }),
+                media_type="application/json",
+                status_code=500,
+                headers={"Access-Control-Allow-Origin": "*"},
+            )
+    
     @app.post("/web_inference")
     async def web_inference(item: dict):
         """
@@ -550,9 +714,23 @@ def web_api():
         """
         Web endpoint for VLM-FO1 inference with SAM3 bbox proposals.
         
-        Expects: {"image_url": "...", "query": "...", "confidence_threshold": 0.5, "max_proposals": 100}
+        Accepts image input in multiple formats:
+        - image_base64: Raw base64-encoded image string (preferred for base64 input)
+        - image_url: URL (http/https) or data URL (data:image/...;base64,...)
+        
+        Expects: {
+            "image_base64": "...",  # Optional: raw base64 string
+            "image_url": "...",     # Optional: URL or data URL
+            "query": "...",
+            "confidence_threshold": 0.5,
+            "max_proposals": 100
+        }
         Returns: {"output": "...", "bboxes": {...}, "sam3_proposals": {...}, "image_size": [...]}
         """
+        print("=" * 60)
+        print("web_inference_sam3 endpoint called")
+        print(f"Request item keys: {list(item.keys())}")
+        print(f"Request item types: {[(k, type(v).__name__) for k, v in item.items()]}")
         try:
             # Ensure HF token is set for SAM3 access (secret should provide this via environment)
             hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_HUB_TOKEN")
@@ -560,49 +738,147 @@ def web_api():
                 os.environ["HF_TOKEN"] = hf_token
                 os.environ["HUGGINGFACE_HUB_TOKEN"] = hf_token
             
+            image_base64 = item.get("image_base64", "")
             image_url = item.get("image_url", "")
             query = item.get("query", "the ball nearest to the bear")
+            
+            # Early validation and logging
+            print(f"Received - image_base64: {bool(image_base64)}, length: {len(image_base64) if image_base64 else 0}")
+            print(f"Received - image_url: {bool(image_url)}, length: {len(image_url) if image_url else 0}")
+            print(f"Received - query: '{query}'")
+            
+            # Validate that we have at least one image input
+            if not image_base64 and not image_url:
+                error_msg = "Either 'image_base64' or 'image_url' must be provided"
+                print(f"❌ Validation error: {error_msg}")
+                return Response(
+                    content=json.dumps({"error": error_msg, "type": "ValidationError"}),
+                    media_type="application/json",
+                    status_code=400,
+                    headers={"Access-Control-Allow-Origin": "*"},
+                )
+            
+            # Validate query is provided
+            if not query or not query.strip():
+                error_msg = "Query parameter is required and cannot be empty"
+                print(f"❌ Validation error: {error_msg}")
+                return Response(
+                    content=json.dumps({"error": error_msg, "type": "ValidationError"}),
+                    media_type="application/json",
+                    status_code=400,
+                    headers={"Access-Control-Allow-Origin": "*"},
+                )
             confidence_threshold = item.get("confidence_threshold", 0.5)
             max_proposals = item.get("max_proposals", 100)
             sam3_model_path = item.get("sam3_model_path", "/models/sam3/sam3.pt")
             
-            # Handle base64 data URLs or regular URLs
+            # Handle base64 image input - prioritize image_base64 field
             # Pass image bytes directly to avoid file system issues across Modal function calls
             image_bytes = None
             image_path_for_remote = None
             
-            if image_url.startswith("data:image"):
-                base64_data = image_url.split(",", 1)[1]
-                image_bytes = base64.b64decode(base64_data)
-                # Don't save to file - pass bytes directly
-            elif image_url.startswith("http"):
-                # For URLs, pass the URL directly
-                image_path_for_remote = image_url
-            else:
-                # Assume it's a file path (unlikely in web context, but handle it)
-                image_path_for_remote = image_url
+            # First, check for direct base64 input (preferred method)
+            if image_base64:
+                try:
+                    print(f"Processing image_base64 (first {min(50, len(image_base64))} chars: {image_base64[:50]}...)")
+                    # Handle base64 string - may or may not have data URL prefix
+                    if image_base64.startswith("data:image"):
+                        # Extract base64 data from data URL
+                        base64_data = image_base64.split(",", 1)[1]
+                        print("Detected data URL format, extracted base64 data")
+                    else:
+                        # Assume it's raw base64 string
+                        base64_data = image_base64
+                        print("Using raw base64 string")
+                    
+                    # Decode base64 to bytes
+                    print(f"Decoding base64 (length: {len(base64_data)})...")
+                    image_bytes = base64.b64decode(base64_data, validate=True)
+                    print(f"✓ Decoded base64 image: {len(image_bytes)} bytes")
+                    
+                    # Validate that decoded bytes form a valid image
+                    try:
+                        test_img = Image.open(BytesIO(image_bytes))
+                        test_img.load()  # Force load to validate
+                        print(f"✓ Validated image: {test_img.size}, format: {test_img.format}")
+                        test_img.close()  # Close after validation
+                    except Exception as img_error:
+                        raise ValueError(f"Decoded base64 is not a valid image: {img_error}")
+                        
+                except base64.binascii.Error as e:
+                    raise ValueError(f"Invalid base64 encoding: {e}")
+                except Exception as e:
+                    raise ValueError(f"Failed to decode/validate base64 image: {e}")
+            # Fallback to image_url if image_base64 not provided
+            elif image_url:
+                print(f"Processing image_url: {image_url[:100]}...")
+                if image_url.startswith("data:image"):
+                    # Handle data URL format
+                    base64_data = image_url.split(",", 1)[1]
+                    try:
+                        print(f"Decoding base64 from data URL (length: {len(base64_data)})...")
+                        image_bytes = base64.b64decode(base64_data, validate=True)
+                        print(f"✓ Decoded base64 image from data URL: {len(image_bytes)} bytes")
+                        
+                        # Validate image
+                        test_img = Image.open(BytesIO(image_bytes))
+                        test_img.load()  # Force load to validate
+                        print(f"✓ Validated image: {test_img.size}, format: {test_img.format}")
+                        test_img.close()  # Close after validation
+                    except base64.binascii.Error as e:
+                        raise ValueError(f"Invalid base64 encoding in data URL: {e}")
+                    except Exception as e:
+                        raise ValueError(f"Failed to decode/validate base64 data URL: {e}")
+                elif image_url.startswith("http"):
+                    # For URLs, pass the URL directly
+                    image_path_for_remote = image_url
+                    print(f"Using image URL: {image_url}")
+                else:
+                    # Assume it's a file path (unlikely in web context, but handle it)
+                    image_path_for_remote = image_url
+                    print(f"Using image path: {image_url}")
             
             # Call remote function with image bytes or path
-            if image_bytes is not None:
-                result = run_inference_with_sam3.remote(
-                    image_bytes=image_bytes,
-                    query=query,
-                    sam3_model_path=sam3_model_path,
-                    confidence_threshold=confidence_threshold,
-                    max_proposals=max_proposals,
-                )
-            else:
-                result = run_inference_with_sam3.remote(
-                    image_path=image_path_for_remote,
-                    query=query,
-                    sam3_model_path=sam3_model_path,
-                    confidence_threshold=confidence_threshold,
-                    max_proposals=max_proposals,
-                )
+            print(f"Calling run_inference_with_sam3.remote()...")
+            try:
+                if image_bytes is not None:
+                    print(f"Using image_bytes: {len(image_bytes)} bytes")
+                    result = run_inference_with_sam3.remote(
+                        image_bytes=image_bytes,
+                        query=query,
+                        sam3_model_path=sam3_model_path,
+                        confidence_threshold=confidence_threshold,
+                        max_proposals=max_proposals,
+                    )
+                else:
+                    print(f"Using image_path: {image_path_for_remote}")
+                    result = run_inference_with_sam3.remote(
+                        image_path=image_path_for_remote,
+                        query=query,
+                        sam3_model_path=sam3_model_path,
+                        confidence_threshold=confidence_threshold,
+                        max_proposals=max_proposals,
+                    )
+                print(f"Remote function call completed successfully")
+            except Exception as e:
+                import traceback
+                error_msg = f"Error calling run_inference_with_sam3.remote(): {str(e)}\n{traceback.format_exc()}"
+                print(f"❌ {error_msg}")
+                raise RuntimeError(error_msg) from e
+            
+            # Validate result structure
+            if not isinstance(result, dict):
+                raise ValueError(f"Expected dict result, got {type(result)}: {result}")
+            print(f"Result keys: {list(result.keys())}")
             
             # Format response for frontend
             detections = []
-            for label, bbox_list in result.get("bboxes", {}).items():
+            bboxes_dict = result.get("bboxes", {})
+            if not isinstance(bboxes_dict, dict):
+                print(f"⚠ Warning: bboxes is not a dict: {type(bboxes_dict)}, value: {bboxes_dict}")
+                bboxes_dict = {}
+            
+            for label, bbox_list in bboxes_dict.items():
                 for bbox in bbox_list:
                     detections.append({
                         "bbox": bbox,
@@ -629,11 +905,17 @@ def web_api():
                 }
             )
         except Exception as e:
-            # Return error with CORS headers
+            # Return error with CORS headers and detailed traceback
             import traceback
+            error_traceback = traceback.format_exc()
+            # Log full error to Modal logs
+            print(f"ERROR in web_inference_sam3: {type(e).__name__}: {str(e)}")
+            print(f"Full traceback:\n{error_traceback}")
+            
             error_response = {
                 "error": str(e),
                 "type": type(e).__name__,
+                "traceback": error_traceback,  # Include traceback for debugging
             }
             return Response(
                 content=json.dumps(error_response),
